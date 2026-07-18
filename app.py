@@ -692,7 +692,10 @@ with tab_bulk:
                 with res_col1:
                     st.markdown("#### Scored Results Preview")
                     show_cols = ['risk_category', 'risk_probability (%)'] + [c for c in results_df.columns if c not in ['risk_category', 'risk_probability (%)']]
-                    st.dataframe(results_df[show_cols], use_container_width=True)
+                    # Limit rendering preview to 1,000 rows to prevent WebSocket MessageSizeError on large uploads
+                    st.dataframe(results_df[show_cols].head(1000), use_container_width=True)
+                    if len(results_df) > 1000:
+                        st.caption(f"⚠️ Showing first 1,000 rows of {len(results_df):,} total records. Use the download button below to retrieve the full dataset.")
                     
                     csv_bytes = results_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
