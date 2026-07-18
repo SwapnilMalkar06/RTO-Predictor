@@ -201,6 +201,10 @@ with st.sidebar:
     if st.button("Reset to Default Settings"):
         st.session_state['active_model'] = load_default_model()
         st.session_state['active_df'] = load_default_dataset()
+        if 'scored_bulk_df' in st.session_state:
+            st.session_state['scored_bulk_df'] = None
+        if 'bulk_filename' in st.session_state:
+            st.session_state['bulk_filename'] = None
         st.rerun()
 
 # --- Main Layout Header ---
@@ -634,6 +638,10 @@ with tab_bulk:
                 ]
                 results_df['risk_category'] = np.select(conditions, ['Low Risk', 'Moderate Risk', 'Critical High Risk'], default='Low Risk')
                 
+                # Save scored bulk dataset to session state for visualization in Graphical Report
+                st.session_state['scored_bulk_df'] = results_df
+                st.session_state['bulk_filename'] = bulk_file.name
+                
                 st.success("🎉 Batch scoring analysis complete!")
                 
                 # Show summary widgets
@@ -692,27 +700,44 @@ with tab_report:
     st.markdown("### 📊 Interactive Returns Diagnostic Studio")
     st.write("Create real-time filtered, interactive graphical reports across any dataset configured in Model Studio.")
     
-    if st.session_state['active_df'] is None:
-        st.warning("⚠️ Active dataset missing! Please configure and load a dataset in the 'Model Studio' tab first.")
+    # Determine which dataset to use for graphical reporting
+    if 'scored_bulk_df' in st.session_state and st.session_state['scored_bulk_df'] is not None:
+        df_report = st.session_state['scored_bulk_df']
+        source_name = f"uploaded Bulk Scanner file (`{st.session_state.get('bulk_filename', 'bulk_file')}`)"
+        is_bulk_active = True
     else:
-        df_report = st.session_state['active_df']
+        df_report = st.session_state.get('active_df', None)
+        source_name = "active database dataset"
+        is_bulk_active = False
         
+    if df_report is None:
+        st.warning("⚠️ Active dataset missing! Please load/train a model in Model Studio or upload a file in Bulk Transaction Scanner first.")
+    else:
+        # Display source banner
+        if is_bulk_active:
+            st.info(f"📊 **Data Source:** Currently visualizing predictions from the {source_name}. To switch back to the database dataset, click 'Reset to Default Settings' in the sidebar.")
+        else:
+            st.info(f"📊 **Data Source:** Visualizing the {source_name} from the data folder.")
+            
         # Determine target column
         active_model = st.session_state['active_model']
         target_col = active_model.get('target_column', 'returned') if active_model is not None else 'returned'
         
         # Fallback check
         if target_col not in df_report.columns:
-            for col in df_report.columns:
-                if col.lower() in ['returned', 'rto', 'status', 'return_status']:
-                    target_col = col
-                    break
-                    
-        # Verify the target column is indeed binary, otherwise skip
+            if 'risk_category' in df_report.columns:
+                target_col = 'risk_category'
+            else:
+                for col in df_report.columns:
+                    if col.lower() in ['returned', 'rto', 'status', 'return_status']:
+                        target_col = col
+                        break
+                        
+        # Verify the target column is indeed binary or categorical with low cardinality
         target_is_binary = False
         if target_col in df_report.columns:
             unique_targets = df_report[target_col].dropna().unique()
-            if len(unique_targets) <= 2:
+            if len(unique_targets) <= 3:
                 target_is_binary = True
                 
         # --- Live Filtering Interface ---
