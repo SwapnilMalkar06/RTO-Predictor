@@ -4,34 +4,42 @@ import numpy as np
 import joblib
 import os
 import time
+import plotly.express as px
+import plotly.graph_objects as go
+from train_model import train_custom_model, detect_column_types
 
-st.set_page_config(page_title="Shopen Pulse - RTO Risk Engine", layout="wide")
+st.set_page_config(
+    page_title="Shopen Pulse - Dynamic RTO Engine",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Custom premium CSS styling overrides
+# --- Premium Custom CSS Styling ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
     
-    /* Global Font Overrides */
+    /* Font overrides */
     html, body, [class*="css"], .stMarkdown {
         font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
-    /* Premium Header Card */
+    /* Header Card Component */
     .header-card {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        padding: 2.2rem;
+        padding: 2rem;
         border-radius: 16px;
         color: white;
         margin-bottom: 2rem;
-        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
         border: 1px solid rgba(255, 255, 255, 0.08);
     }
     .header-card h1 {
         color: #f8fafc !important;
-        font-size: 2.4rem !important;
+        font-size: 2.2rem !important;
         font-weight: 800 !important;
-        margin-bottom: 0.4rem !important;
+        margin-bottom: 0.5rem !important;
         letter-spacing: -0.025em;
     }
     .header-card p {
@@ -40,429 +48,989 @@ st.markdown("""
         margin: 0;
     }
     
-    /* Styled widgets & containers */
+    /* Segment Panels */
     .section-card {
-        background-color: #f8fafc;
+        background-color: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 12px;
         padding: 1.5rem;
         margin-bottom: 1.5rem;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
     }
     
-    /* Custom styling for metrics */
+    /* Metric Card styling */
     div[data-testid="stMetricValue"] {
-        font-size: 2rem;
+        font-size: 1.8rem;
         font-weight: 700;
         color: #0f172a;
     }
     
-    /* Styling for sidebar */
+    /* Status indicators */
+    .success-alert {
+        background-color: #f0fdf4;
+        border-left: 5px solid #16a34a;
+        color: #14532d;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+    }
+    .warning-alert {
+        background-color: #fffbef;
+        border-left: 5px solid #d97706;
+        color: #78350f;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+    }
+    .error-alert {
+        background-color: #fef2f2;
+        border-left: 5px solid #dc2626;
+        color: #7f1d1d;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+    }
+    
+    /* Premium Sidebar adjustments */
     section[data-testid="stSidebar"] {
         background-color: #0f172a;
-        color: #f8fafc;
     }
     section[data-testid="stSidebar"] .stMarkdown {
-        color: #94a3b8;
+        color: #e2e8f0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Dynamically parse tracking attributes from baseline spreadsheets for drop-down option rendering
-@st.cache_data
-def load_base_metadata():
-    file_path = os.path.join("data", "amazon_returns_dataset_cleaned.xlsx")
-    if os.path.exists(file_path):
-        return pd.read_excel(file_path, engine="openpyxl")
-    return None
-
-df_meta = load_base_metadata()
-
-# Fetch serialized model pipelines
+# --- Helper Functions ---
 @st.cache_resource
-def load_trained_pipeline():
+def load_default_model():
     model_path = os.path.join('models', 'rto_predictor_model.pkl')
     if os.path.exists(model_path):
-        return joblib.load(model_path)
+        try:
+            return joblib.load(model_path)
+        except Exception as e:
+            st.sidebar.error(f"Error loading default model: {e}")
+            return None
     return None
 
-meta_bundle = load_trained_pipeline()
+@st.cache_data
+def load_default_dataset():
+    file_path = os.path.join("data", "amazon_returns_dataset_cleaned.xlsx")
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_excel(file_path, engine="openpyxl")
+            # Standardize columns mapping for initial Amazon dataset
+            column_mapping = {
+                'Order_ID': 'order_id', 'Order ID': 'order_id',
+                'Product_ID': 'product_id', 'Product ID': 'product_id',
+                'User_ID': 'customer_id', 'User ID': 'customer_id',
+                'Product_Category': 'product_category', 'Product Category': 'product_category',
+                'Product_Price': 'price', 'Product Price': 'price', 'Price': 'price',
+                'Order_Quantity': 'quantity', 'Order Quantity': 'quantity', 'Quantity': 'quantity',
+                'Return_Reason': 'return_reason', 'Return Reason': 'return_reason',
+                'Return_Status': 'returned', 'Return Status': 'returned', 'returned': 'returned',
+                'Days_to_Return': 'delivery_days', 'Days to Return': 'delivery_days',
+                'User_Location': 'user_location', 'User Location': 'user_location',
+                'Payment_Method': 'payment_method', 'Payment Method': 'payment_method',
+                'Shipping_Method': 'shipping_type', 'Shipping Method': 'shipping_type', 'Shipping_Type': 'shipping_type', 'Shipping Type': 'shipping_type',
+                'Discount_Applied': 'discount_pct', 'Discount Applied': 'discount_pct', 'Discount': 'discount_pct',
+                'Order_Date': 'order_datetime', 'Order Date': 'order_datetime', 'order_date': 'order_datetime',
+                'is_prime_member': 'is_prime_member', 'Prime_Member': 'is_prime_member',
+                'previous_returns_count': 'previous_returns_count', 'previous returns count': 'previous_returns_count',
+                'customer_total_orders': 'customer_total_orders', 'customer total orders': 'customer_total_orders',
+                'customer_tenure_days': 'customer_tenure_days', 'customer tenure days': 'customer_tenure_days',
+                'review_rating': 'review_rating', 'review rating': 'review_rating',
+                'seller_rating': 'seller_rating', 'seller rating': 'seller_rating'
+            }
+            df = df.rename(columns=lambda x: column_mapping.get(x, x))
+            df = df.rename(columns=lambda x: column_mapping.get(x.strip(), x))
+            df.columns = df.columns.str.strip().str.lower()
+            
+            # Derive weekend mapping if not present
+            if 'order_weekday' in df.columns:
+                df['is_weekend'] = df['order_weekday'].isin(['Saturday', 'Sunday']).astype(int)
+            elif 'order_datetime' in df.columns:
+                try:
+                    dt_series = pd.to_datetime(df['order_datetime'])
+                    df['order_weekday'] = dt_series.dt.day_name()
+                    df['order_hour'] = dt_series.dt.hour
+                    df['is_weekend'] = dt_series.dt.dayofweek.isin([5, 6]).astype(int)
+                except Exception:
+                    df['is_weekend'] = 0
+            else:
+                df['is_weekend'] = 0
+                
+            return df
+        except Exception as e:
+            st.sidebar.error(f"Error loading default dataset: {e}")
+            return None
+    return None
 
-# Header Layout Component
+# --- State Management Initialization ---
+if 'active_model' not in st.session_state:
+    st.session_state['active_model'] = load_default_model()
+    
+if 'active_df' not in st.session_state:
+    st.session_state['active_df'] = load_default_dataset()
+
+# --- Sidebar Controls ---
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/9598/9598096.png", width=60)
+    st.markdown("### **Shopen Pulse Console**")
+    st.write("Dynamic RTO & returns control cockpit.")
+    st.markdown("---")
+    
+    # Model Status Card
+    if st.session_state['active_model'] is not None:
+        model_meta = st.session_state['active_model']
+        target_name = model_meta.get('target_column', 'returned')
+        acc = model_meta.get('metrics', {}).get('accuracy', 0.85)
+        auc = model_meta.get('metrics', {}).get('roc_auc', 0.88)
+        
+        st.success("🟢 **Operational Model Loaded**")
+        st.markdown(f"**Target Col:** `{target_name}`")
+        st.markdown(f"**Num Features:** `{len(model_meta['numerical_features'])}`")
+        st.markdown(f"**Cat Features:** `{len(model_meta['categorical_features'])}`")
+        st.markdown(f"**Accuracy:** `{acc*100:.1f}%` | **ROC-AUC:** `{auc:.2f}`")
+    else:
+        st.error("🔴 **No Model Loaded**")
+        st.info("Train a model in the 'Model Studio' tab to enable predictions.")
+        
+    st.markdown("---")
+    # Quick reset button
+    if st.button("Reset to Default Settings"):
+        st.session_state['active_model'] = load_default_model()
+        st.session_state['active_df'] = load_default_dataset()
+        st.rerun()
+
+# --- Main Layout Header ---
 st.markdown("""
 <div class="header-card">
-    <h1>🛡️ Shopen Pulse — RTO Risk Control Center</h1>
-    <p>Empowering digital merchants to inspect, predict, and intercept package return risk in real-time.</p>
+    <h1>🛡️ Shopen Pulse — Return & RTO Predictive Suite</h1>
+    <p>Upload custom datasets, dynamically train classification models, run batch files, and analyze returns diagnostics.</p>
 </div>
 """, unsafe_allow_html=True)
 
-if meta_bundle is None:
-    st.error("❌ Operational model artifact missing! Please execute `python train_model.py` in your terminal workspace to build your predictive file first.")
-else:
-    model_pipeline = meta_bundle['pipeline']
-    numerical_features = meta_bundle['numerical_features']
-    categorical_features = meta_bundle['categorical_features']
+# Define application tabs
+tab_studio, tab_profiler, tab_bulk, tab_report = st.tabs([
+    "⚙️ Model Studio (Train & Load)",
+    "🎯 Dynamic Risk Profiler",
+    "📁 Bulk Transaction Scanner",
+    "📊 Interactive Graphical Report"
+])
+
+# ==========================================
+# TAB: MODEL STUDIO (Train & Load)
+# ==========================================
+with tab_studio:
+    st.markdown("### ⚙️ Machine Learning Model Studio")
+    st.write("Upload a raw dataset, dynamically define the schema, train the Random Forest pipeline, and review metrics.")
     
-    # Setup workspace tab routing
-    tab1, tab2, tab3 = st.tabs([
-        "🎯 Single-Order Risk Profiler", 
-        "📁 Bulk Transaction Scanner", 
-        "📊 Analytics & Diagnostics"
-    ])
+    col_input, col_metrics = st.columns([1.1, 0.9])
     
-    # ------------------ TAB 1: SINGLE-ORDER PROFILER ------------------
-    with tab1:
-        st.markdown("### 🎯 Live Transaction Analyzer")
-        st.write("Submit individual transaction details below to evaluate RTO likelihood and generate operational recommendations.")
+    with col_input:
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.subheader("📥 Dataset Ingestion")
         
-        col_form, col_result = st.columns([1.1, 0.9])
+        dataset_source = st.radio(
+            "Select Training Dataset Source:",
+            ["Use Default Amazon Returns Cleaned Dataset", "Upload Custom CSV or Excel File"]
+        )
+        
+        raw_df = None
+        if dataset_source == "Use Default Amazon Returns Cleaned Dataset":
+            raw_df = load_default_dataset()
+            if raw_df is not None:
+                st.info("Loaded default Amazon returns dataset successfully.")
+            else:
+                st.error("Missing default dataset. Please upload a file manually.")
+        else:
+            uploaded_file = st.file_uploader("Upload CSV or XLSX file", type=["csv", "xlsx"])
+            if uploaded_file is not None:
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        raw_df = pd.read_csv(uploaded_file)
+                    else:
+                        raw_df = pd.read_excel(uploaded_file, engine="openpyxl")
+                    st.success(f"Successfully uploaded: {uploaded_file.name}")
+                except Exception as e:
+                    st.error(f"Error parsing file: {e}")
+                    
+        if raw_df is not None:
+            # Clean dataframe column names
+            raw_df.columns = raw_df.columns.str.strip()
+            
+            # Brief preview of data
+            st.markdown("#### 🔍 Dataset Summary")
+            st.write(f"**Dimensions:** {raw_df.shape[0]} rows, {raw_df.shape[1]} columns")
+            
+            # Select target variable
+            cols_list = sorted(list(raw_df.columns))
+            # Auto-detect target column index
+            target_default_idx = 0
+            for idx, c in enumerate(cols_list):
+                if c.lower() in ['returned', 'return_status', 'rto', 'returned_status', 'status']:
+                    target_default_idx = idx
+                    break
+                    
+            target_col = st.selectbox("Select Target Class Column:", cols_list, index=target_default_idx)
+            
+            # Dynamic Feature Mapping
+            num_cols, cat_cols, ignored = detect_column_types(raw_df, target_col)
+            
+            st.markdown("#### ⚡ Dynamic Feature Selection")
+            st.write("Exclude columns or adjust feature types inferred by the model:")
+            
+            all_possible_features = [c for c in raw_df.columns if c != target_col]
+            
+            selected_features = st.multiselect(
+                "Features to include in model pipeline:",
+                all_possible_features,
+                default=[c for c in all_possible_features if c not in ignored]
+            )
+            
+            # Override feature type configuration
+            st.markdown("##### Categorize Feature Columns:")
+            feat_types = {}
+            col_feat_1, col_feat_2 = st.columns(2)
+            
+            for idx, feat in enumerate(selected_features):
+                # Put in alternate columns
+                target_col_grid = col_feat_1 if idx % 2 == 0 else col_feat_2
+                with target_col_grid:
+                    inferred_type = "Numerical" if feat in num_cols else "Categorical"
+                    feat_types[feat] = st.selectbox(
+                        f"Type for `{feat}`:",
+                        ["Numerical", "Categorical"],
+                        index=0 if inferred_type == "Numerical" else 1,
+                        key=f"feat_type_{feat}"
+                    )
+                    
+            # Separate features based on user settings
+            final_num_features = [f for f, t in feat_types.items() if t == "Numerical"]
+            final_cat_features = [f for f, t in feat_types.items() if t == "Categorical"]
+            
+            # Training action button
+            if st.button("🚀 Train Machine Learning Pipeline", type="primary", use_container_width=True):
+                if len(selected_features) == 0:
+                    st.error("Please select at least 1 feature column to train the model.")
+                else:
+                    with st.spinner("Executing pipeline preprocessing and RF training..."):
+                        try:
+                            # Standardize column casing/naming to lowercase for model compatibility
+                            df_train = raw_df.copy()
+                            df_train.columns = df_train.columns.str.strip().str.lower()
+                            
+                            lower_target = target_col.lower()
+                            lower_num = [c.lower() for c in final_num_features]
+                            lower_cat = [c.lower() for c in final_cat_features]
+                            
+                            # Clean target values to binary integers
+                            trained_meta = train_custom_model(df_train, lower_target, lower_num, lower_cat)
+                            
+                            st.session_state['active_model'] = trained_meta
+                            st.session_state['active_df'] = df_train
+                            st.success("🎉 ML pipeline trained and loaded as operational model!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Training failed: {e}")
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+    with col_metrics:
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.subheader("📊 Active Model Blueprint")
+        
+        if st.session_state['active_model'] is not None:
+            active = st.session_state['active_model']
+            metrics = active['metrics']
+            
+            # Metric grid
+            m_col1, m_col2 = st.columns(2)
+            m_col1.metric("Accuracy Score", f"{metrics['accuracy']*100:.2f}%")
+            m_col2.metric("ROC-AUC Score", f"{metrics['roc_auc']:.3f}")
+            
+            # Show Classification Report
+            st.markdown("#### Classification Report Details")
+            report_df = pd.DataFrame(metrics['classification_report']).transpose()
+            st.dataframe(report_df.style.format(precision=3), use_container_width=True)
+            
+            # Plot Feature Importance using Plotly
+            st.markdown("#### Feature Importance Profile")
+            agg_importances = active.get('aggregated_importances', {})
+            if len(agg_importances) > 0:
+                imp_df = pd.DataFrame({
+                    'Feature': list(agg_importances.keys()),
+                    'Importance': list(agg_importances.values())
+                }).sort_values(by='Importance', ascending=True)
+                
+                fig_imp = px.bar(
+                    imp_df,
+                    x='Importance',
+                    y='Feature',
+                    orientation='h',
+                    title='Aggregated Feature Importance',
+                    color='Importance',
+                    color_continuous_scale='blues',
+                    template='plotly_white'
+                )
+                fig_imp.update_layout(
+                    height=350,
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    coloraxis_showscale=False
+                )
+                st.plotly_chart(fig_imp, use_container_width=True)
+            else:
+                st.info("Feature importance data not found in model.")
+        else:
+            st.info("Load or train a model to view metrics.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# TAB: DYNAMIC RISK PROFILER
+# ==========================================
+with tab_profiler:
+    st.markdown("### 🎯 Single-Order Risk Profiler")
+    st.write("Manually compile dynamic forms to predict return risks for single transactions in real-time.")
+    
+    if st.session_state['active_model'] is None:
+        st.warning("⚠️ Operational model artifact missing! Please configure and train a model in the 'Model Studio' tab first.")
+    else:
+        model_bundle = st.session_state['active_model']
+        model_pipeline = model_bundle['pipeline']
+        numerical_features = model_bundle['numerical_features']
+        categorical_features = model_bundle['categorical_features']
+        feature_metadata = model_bundle['feature_metadata']
+        
+        col_form, col_eval = st.columns([1.1, 0.9])
         
         with col_form:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.subheader("📥 Transaction Entry Form")
+            st.subheader("📥 Transaction Inputs Form")
             
-            # Categories & selections loaded dynamically from historical spreadsheet if available
-            categories = list(df_meta['product_category'].dropna().unique()) if df_meta is not None else ["Clothing", "Electronics", "Home", "Sports", "Toys", "Beauty", "Books"]
-            shipping_types = list(df_meta['shipping_type'].dropna().unique()) if df_meta is not None else ["Standard", "Expedited", "Two-Day", "Same-Day"]
-            payment_methods = list(df_meta['payment_method'].dropna().unique()) if df_meta is not None else ["Credit Card", "Debit Card", "COD", "UPI", "NetBanking", "Gift Card"]
-            weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            user_inputs = {}
             
-            # Form grid splits
+            # Grid display inputs (split numerical and categorical)
             c1, c2 = st.columns(2)
-            with c1:
-                prod_cat = st.selectbox("Product Category", categories, index=0)
-                price_val = st.number_input("Unit Price ($)", min_value=1.0, max_value=1000.0, value=50.0)
-                qty_val = st.number_input("Quantity Purchased", min_value=1, max_value=50, value=1)
-                ship_type = st.selectbox("Shipping Mode", shipping_types, index=0)
-                deliv_days = st.slider("Expected Delivery (Days)", min_value=1, max_value=14, value=3)
-                
-            with c2:
-                disc_val = st.slider("Discount Applied (%)", min_value=0, max_value=90, value=0)
-                pay_method = st.selectbox("Payment Method", payment_methods, index=0)
-                prev_returns = st.number_input("Previous Returns Count", min_value=0, max_value=50, value=0)
-                total_orders = st.number_input("Customer Total Orders", min_value=1, max_value=500, value=5)
-                tenure_days = st.slider("Customer Tenure (Days)", min_value=0, max_value=2000, value=180)
-                
-            st.markdown("#### ⚙️ Additional Attributes")
-            c3, c4 = st.columns(2)
-            with c3:
-                is_prime = st.checkbox("Is Prime Member", value=False)
-                ord_weekday = st.selectbox("Order Weekday", weekdays, index=0)
-                ord_hour = st.slider("Order Hour (0-23)", min_value=0, max_value=23, value=12)
-            with c4:
-                prod_rating = st.slider("Product Review Rating", min_value=1.0, max_value=5.0, value=4.0, step=0.1)
-                sel_rating = st.slider("Seller Rating", min_value=1.0, max_value=5.0, value=4.2, step=0.1)
-                
-            submit_trigger = st.button("Evaluate Order Risk Profile", type="primary", use_container_width=True)
+            
+            # Process numerical inputs
+            for idx, num_feat in enumerate(numerical_features):
+                target_column = c1 if idx % 2 == 0 else c2
+                with target_column:
+                    meta = feature_metadata[num_feat]
+                    min_val = float(meta['min'])
+                    max_val = float(meta['max'])
+                    median_val = float(meta['median'])
+                    
+                    # Tweak format based on integer values
+                    if min_val.is_integer() and max_val.is_integer():
+                        # Render dynamic slider
+                        user_inputs[num_feat] = st.slider(
+                            f"{num_feat.replace('_', ' ').title()}",
+                            min_value=int(min_val),
+                            max_value=int(max_val),
+                            value=int(median_val),
+                            step=1
+                        )
+                    else:
+                        # Render number input
+                        user_inputs[num_feat] = st.number_input(
+                            f"{num_feat.replace('_', ' ').title()}",
+                            min_value=min_val,
+                            max_value=max_val,
+                            value=median_val,
+                            format="%.2f"
+                        )
+                        
+            # Process categorical inputs
+            for idx, cat_feat in enumerate(categorical_features):
+                target_column = c1 if (idx + len(numerical_features)) % 2 == 0 else c2
+                with target_column:
+                    meta = feature_metadata[cat_feat]
+                    unique_vals = meta['unique_values']
+                    mode_val = meta['mode']
+                    
+                    # Ensure mode is inside unique vals list
+                    default_idx = unique_vals.index(mode_val) if mode_val in unique_vals else 0
+                    
+                    user_inputs[cat_feat] = st.selectbox(
+                        f"{cat_feat.replace('_', ' ').title()}",
+                        unique_vals,
+                        index=default_idx
+                    )
+                    
+            submit_eval = st.button("Evaluate Transaction Risk Profile", type="primary", use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
             
-        with col_result:
+        with col_eval:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.subheader("📊 Assessment Output")
             
-            if submit_trigger:
-                is_wknd = 1 if ord_weekday in ["Saturday", "Sunday"] else 0
-                
-                # Align variables exactly to training dataset format
-                user_input_map = {
-                    'product_category': prod_cat,
-                    'price': price_val,
-                    'quantity': qty_val,
-                    'shipping_type': ship_type,
-                    'delivery_days': deliv_days,
-                    'discount_pct': disc_val,
-                    'previous_returns_count': prev_returns,
-                    'customer_total_orders': total_orders,
-                    'customer_tenure_days': tenure_days,
-                    'is_prime_member': 1 if is_prime else 0,
-                    'order_weekday': ord_weekday,
-                    'order_hour': ord_hour,
-                    'is_weekend': is_wknd,
-                    'review_rating': prod_rating,
-                    'seller_rating': sel_rating,
-                    'payment_method': pay_method
-                }
-                
-                # Transform to DataFrame
-                input_row = pd.DataFrame([user_input_map])
+            if submit_eval:
+                # Convert inputs to DataFrame
+                input_row = pd.DataFrame([user_inputs])
                 
                 with st.spinner("Analyzing operational RTO risk vectors..."):
-                    time.sleep(0.4)
-                    rto_score = model_pipeline.predict_proba(input_row)[0][1] * 100
+                    time.sleep(0.3)
+                    prob_scores = model_pipeline.predict_proba(input_row)[0]
+                    rto_prob = prob_scores[1] * 100
                     
-                st.session_state['last_rto_score'] = rto_score
-                st.session_state['base_input'] = user_input_map
+                st.session_state['eval_rto_score'] = rto_prob
+                st.session_state['eval_inputs'] = user_inputs
                 
-            if 'last_rto_score' in st.session_state:
-                score = st.session_state['last_rto_score']
-                base_data = st.session_state['base_input']
+            if 'eval_rto_score' in st.session_state:
+                score = st.session_state['eval_rto_score']
+                base_inputs = st.session_state['eval_inputs']
                 
-                # Display risk categorization banner
+                # Show premium risk category banner
                 if score < 35:
-                    st.success(f"### ✅ Low RTO Risk: {score:.1f}%")
-                    st.markdown("""
-                    🟢 **Action Recommendation:** Safe transaction. Auto-forward to standard fulfillment queue and generate warehouse shipping labels.
-                    """)
+                    st.markdown(f"""
+                    <div class="success-alert">
+                        <h3>✅ Low Return Risk: {score:.1f}%</h3>
+                        <p><strong>Action Recommendation:</strong> Safe transaction. Process order normally and generate fulfillment labels.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                 elif score < 65:
-                    st.warning(f"### ⚠️ Moderate RTO Risk: {score:.1f}%")
-                    st.markdown("""
-                    🟡 **Action Recommendation:** Verification requested. Fire address verification via WhatsApp notification to confirm client details.
-                    """)
+                    st.markdown(f"""
+                    <div class="warning-alert">
+                        <h3>⚠️ Moderate Return Risk: {score:.1f}%</h3>
+                        <p><strong>Action Recommendation:</strong> Verification requested. Recommend dispatching automated order confirmation notification via SMS or WhatsApp.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                 else:
-                    st.error(f"### 🚨 Critical High Risk: {score:.1f}%")
-                    st.markdown("""
-                    🔴 **Action Recommendation:** Shipping Hold. Suspend packaging operations. Order shows significant high-risk correlations. Resolve via manual telephone verification.
-                    """)
-                
+                    st.markdown(f"""
+                    <div class="error-alert">
+                        <h3>🚨 Critical High Risk: {score:.1f}%</h3>
+                        <p><strong>Action Recommendation:</strong> Hold Order. Flagged for fraud or high likelihood of return. Require manual customer verification call before shipment.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                # What-If Scenario Simulator dynamically built based on model feature importances
                 st.markdown("---")
+                st.markdown("#### 🛠️ Dynamic What-If Simulator")
+                st.write("Modify key numeric drivers below to evaluate real-time adjustments on return likelihood:")
                 
-                # Key Metrics Grid
-                st.markdown("#### Primary Merchant Risk Drivers")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Payment Mode", str(base_data['payment_method']), "Risk Segment" if str(base_data['payment_method']) == "COD" else "Stable Channel")
-                m2.metric("Return History", f"{base_data['previous_returns_count']} Ret.", "Prior return record" if base_data['previous_returns_count'] > 0 else "Normal")
-                m3.metric("Promo Discount", f"{base_data['discount_pct']}% Off", "Impulse Factor" if base_data['discount_pct'] > 15 else "Standard")
+                # Find top 2 numerical features based on aggregate importance
+                agg_imp = model_bundle.get('aggregated_importances', {})
+                num_imps = {k: v for k, v in agg_imp.items() if k in numerical_features}
+                sorted_num_feats = sorted(num_imps.keys(), key=lambda x: num_imps[x], reverse=True)
                 
-                st.markdown("---")
+                top_feats = sorted_num_feats[:2] if len(sorted_num_feats) >= 2 else sorted_num_feats
                 
-                # What-if workspace subsegment
-                st.markdown("#### 🛠️ What-If Scenario Simulator")
-                st.write("Modify high-impact operational controls to see how changing business decisions adjusts risk predictions in real-time:")
+                sim_inputs = base_inputs.copy()
                 
-                sim_delivery = st.slider("Adjust Delivery Speed (Days)", min_value=1, max_value=14, value=int(base_data['delivery_days']))
-                sim_payment = st.selectbox("Adjust Payment Method", payment_methods, index=payment_methods.index(base_data['payment_method']))
-                sim_discount = st.slider("Adjust Discount applied (%)", min_value=0, max_value=90, value=int(base_data['discount_pct']))
-                
-                simulated_map = base_data.copy()
-                simulated_map['delivery_days'] = sim_delivery
-                simulated_map['payment_method'] = sim_payment
-                simulated_map['discount_pct'] = sim_discount
-                
-                simulated_row = pd.DataFrame([simulated_map])
-                sim_score = model_pipeline.predict_proba(simulated_row)[0][1] * 100
+                # Render simulator sliders
+                for feat in top_feats:
+                    meta = feature_metadata[feat]
+                    min_v = float(meta['min'])
+                    max_v = float(meta['max'])
+                    current_v = float(base_inputs[feat])
+                    
+                    if min_v.is_integer() and max_v.is_integer():
+                        sim_inputs[feat] = st.slider(
+                            f"Simulate `{feat.replace('_', ' ').title()}`:",
+                            min_value=int(min_v),
+                            max_value=int(max_v),
+                            value=int(current_v),
+                            step=1,
+                            key=f"sim_{feat}"
+                        )
+                    else:
+                        sim_inputs[feat] = st.slider(
+                            f"Simulate `{feat.replace('_', ' ').title()}`:",
+                            min_value=min_v,
+                            max_value=max_v,
+                            value=current_v,
+                            key=f"sim_{feat}"
+                        )
+                        
+                # Predict simulated row
+                sim_row = pd.DataFrame([sim_inputs])
+                sim_score = model_pipeline.predict_proba(sim_row)[0][1] * 100
                 
                 # Compare metrics
                 delta = sim_score - score
                 st.metric(
-                    label="Adjusted RTO Risk Probability",
+                    label="Adjusted Risk Probability",
                     value=f"{sim_score:.1f}%",
                     delta=f"{delta:+.1f}%" if delta != 0 else "No Change",
                     delta_color="inverse"
                 )
-                
-                if sim_score < score:
-                    st.info("💡 **Decision Insight:** Lowering risk! Shorter expected delivery times, secure prepaid methods, or lower promotional discounts reduce returns.")
             else:
-                st.info("💡 Please complete the transaction inputs and click 'Evaluate Order Risk Profile' to generate results.")
+                st.info("💡 Input values and click 'Evaluate Transaction Risk Profile' to examine predictions.")
             st.markdown('</div>', unsafe_allow_html=True)
-            
-    # ------------------ TAB 2: BULK TRANSACTION SCANNER ------------------
-    with tab2:
-        st.markdown("### 📁 Batch Order Risk Scan")
-        st.write("Submit a spreadsheet of pending orders to scan for RTO risk anomalies before shipping.")
+
+# ==========================================
+# TAB: BULK TRANSACTION SCANNER
+# ==========================================
+with tab_bulk:
+    st.markdown("### 📁 Batch Order Risk Scanner")
+    st.write("Scan entire order registries to categorize returns risk before warehouse loading.")
+    
+    if st.session_state['active_model'] is None:
+        st.warning("⚠️ Operational model artifact missing! Please configure and train a model in the 'Model Studio' tab first.")
+    else:
+        model_bundle = st.session_state['active_model']
+        model_pipeline = model_bundle['pipeline']
+        numerical_features = model_bundle['numerical_features']
+        categorical_features = model_bundle['categorical_features']
+        feature_metadata = model_bundle['feature_metadata']
         
-        # Download template help layout
-        st.markdown("""
-        > **Spreadsheet Column Format Instructions:**  
-        > The upload file must include column headers matching:  
-        > `price, quantity, previous_returns_count, customer_total_orders, discount_pct, review_rating, seller_rating, customer_tenure_days, is_prime_member, delivery_days, order_hour, order_weekday, product_category, payment_method, shipping_type`
-        """)
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.subheader("📥 Upload Pending Registry")
+        st.write("Upload a CSV/Excel file to score risk predictions across all rows.")
         
-        uploaded_file = st.file_uploader("Upload CSV or XLSX file", type=["csv", "xlsx"])
-        local_path = st.text_input("Or enter absolute path to local CSV/XLSX file on your computer:")
+        # Display required features
+        st.markdown(f"**Required Features for Scoring:** `{', '.join(numerical_features + categorical_features)}`")
         
-        file_to_process = None
-        if uploaded_file is not None:
-            file_to_process = uploaded_file
-        elif local_path:
-            if os.path.exists(local_path):
-                file_to_process = local_path
-            else:
-                st.error("❌ Specified path does not exist on your computer. Please check the spelling and path formatting.")
-                
-        if file_to_process is not None:
+        bulk_file = st.file_uploader("Upload pending file:", type=["csv", "xlsx"], key="bulk_uploader")
+        
+        if bulk_file is not None:
             try:
-                # Ingest dataset
-                if isinstance(file_to_process, str):
-                    if file_to_process.endswith('.csv'):
-                        batch_df = pd.read_csv(file_to_process)
-                    else:
-                        batch_df = pd.read_excel(file_to_process, engine="openpyxl")
+                # Load
+                if bulk_file.name.endswith('.csv'):
+                    bulk_df = pd.read_csv(bulk_file)
                 else:
-                    if file_to_process.name.endswith('.csv'):
-                        batch_df = pd.read_csv(file_to_process)
-                    else:
-                        batch_df = pd.read_excel(file_to_process, engine="openpyxl")
-                
-                # Copy original columns for display
-                display_df = batch_df.copy()
-                
-                # Standardize columns using a translation dictionary
-                column_mapping = {
-                    'order_id': 'order_id', 'order id': 'order_id',
-                    'product_id': 'product_id', 'product id': 'product_id',
-                    'user_id': 'customer_id', 'user id': 'customer_id', 'customer_id': 'customer_id',
-                    'product_category': 'product_category', 'product category': 'product_category',
-                    'product_price': 'price', 'product price': 'price', 'price': 'price',
-                    'order_quantity': 'quantity', 'order quantity': 'quantity', 'quantity': 'quantity',
-                    'return_reason': 'return_reason', 'return reason': 'return_reason',
-                    'return_status': 'returned', 'return status': 'returned',
-                    'days_to_return': 'delivery_days', 'days to return': 'delivery_days',
-                    'user_location': 'user_location', 'user location': 'user_location',
-                    'payment_method': 'payment_method', 'payment method': 'payment_method',
-                    'shipping_method': 'shipping_type', 'shipping method': 'shipping_type', 'shipping_type': 'shipping_type', 'shipping type': 'shipping_type',
-                    'discount_applied': 'discount_pct', 'discount applied': 'discount_pct', 'discount': 'discount_pct',
-                    'order_date': 'order_datetime', 'order date': 'order_datetime', 'order_datetime': 'order_datetime',
-                    'is_prime_member': 'is_prime_member', 'prime_member': 'is_prime_member', 'prime member': 'is_prime_member',
-                    'previous_returns_count': 'previous_returns_count', 'previous returns count': 'previous_returns_count',
-                    'customer_total_orders': 'customer_total_orders', 'customer total orders': 'customer_total_orders',
-                    'customer_tenure_days': 'customer_tenure_days', 'customer tenure days': 'customer_tenure_days',
-                    'review_rating': 'review_rating', 'review rating': 'review_rating',
-                    'seller_rating': 'seller_rating', 'seller rating': 'seller_rating'
-                }
-                
-                # Rename the dataframe columns for model scoring mapping
-                scored_df = batch_df.rename(columns=lambda x: column_mapping.get(x, column_mapping.get(x.strip(), column_mapping.get(x.strip().lower(), x))))
-                scored_df.columns = scored_df.columns.str.strip().str.lower()
-                
-                # Derivations
-                if 'order_datetime' in scored_df.columns and 'order_weekday' not in scored_df.columns:
-                    try:
-                        dt_series = pd.to_datetime(scored_df['order_datetime'])
-                        scored_df['order_weekday'] = dt_series.dt.day_name()
-                        if 'order_hour' not in scored_df.columns:
-                            scored_df['order_hour'] = dt_series.dt.hour
-                    except Exception:
-                        pass
-                
-                if 'order_weekday' in scored_df.columns and 'is_weekend' not in scored_df.columns:
-                    scored_df['is_weekend'] = scored_df['order_weekday'].isin(['Saturday', 'Sunday']).astype(int)
-                
-                # Load default values from training metadata or define standard fallbacks
-                meta_defaults = meta_bundle.get('default_values', {})
-                standard_fallbacks = {
-                    'price': 50.0, 'quantity': 1, 'previous_returns_count': 0, 'customer_total_orders': 5,
-                    'discount_pct': 0, 'review_rating': 4.0, 'seller_rating': 4.0, 'customer_tenure_days': 180,
-                    'is_prime_member': 0, 'delivery_days': 3, 'order_hour': 12, 'is_weekend': 0,
-                    'product_category': 'Clothing', 'payment_method': 'Credit Card', 'shipping_type': 'Standard',
-                    'order_weekday': 'Monday'
-                }
-                
-                # Align columns to what pipeline expects
-                features_ordered = numerical_features + categorical_features
-                
-                # Fill missing columns using default values
-                for col in features_ordered:
-                    if col not in scored_df.columns:
-                        default_val = meta_defaults.get(col, standard_fallbacks.get(col, 0.0 if col in numerical_features else 'Standard'))
-                        scored_df[col] = default_val
-                
-                # Extract inputs
-                model_batch_in = scored_df[features_ordered]
-                
-                with st.spinner("Executing batch pipeline predictions..."):
-                    rto_probs = model_pipeline.predict_proba(model_batch_in)[:, 1] * 100
-                    display_df['rto_risk_probability (%)'] = np.round(rto_probs, 2)
+                    bulk_df = pd.read_excel(bulk_file, engine="openpyxl")
                     
-                    # Set risk categories
-                    conditions = [
-                        (display_df['rto_risk_probability (%)'] < 35),
-                        (display_df['rto_risk_probability (%)'] >= 35) & (display_df['rto_risk_probability (%)'] < 65),
-                        (display_df['rto_risk_probability (%)'] >= 65)
-                    ]
-                    categories_list = ['Low Risk', 'Moderate Risk', 'Critical High Risk']
-                    display_df['rto_risk_category'] = np.select(conditions, categories_list, default='Low Risk')
+                # Clean column headers
+                original_cols = list(bulk_df.columns)
+                bulk_df.columns = bulk_df.columns.str.strip().str.lower()
                 
-                st.success("🎉 Batch Assessment Complete!")
+                # Verify and align columns
+                missing_features = []
+                aligned_df = pd.DataFrame()
                 
-                # Batch summary dashboard
-                bm1, bm2, bm3 = st.columns(3)
-                total_scanned = len(display_df)
-                avg_scanned_risk = display_df['rto_risk_probability (%)'].mean()
-                high_risk_scanned = (display_df['rto_risk_category'] == 'Critical High Risk').sum()
-                high_risk_scanned_pct = (high_risk_scanned / total_scanned) * 100
+                for num_col in numerical_features:
+                    if num_col in bulk_df.columns:
+                        aligned_df[num_col] = bulk_df[num_col]
+                    else:
+                        missing_features.append(num_col)
+                        aligned_df[num_col] = feature_metadata[num_col]['median']
+                        
+                for cat_col in categorical_features:
+                    if cat_col in bulk_df.columns:
+                        aligned_df[cat_col] = bulk_df[cat_col]
+                    else:
+                        missing_features.append(cat_col)
+                        aligned_df[cat_col] = feature_metadata[cat_col]['mode']
+                        
+                # Warn if missing features were filled with defaults
+                if len(missing_features) > 0:
+                    st.warning(f"⚠️ **Note:** The following columns were missing and imputed using training metadata defaults: `{', '.join(missing_features)}`")
+                    
+                # Run prediction
+                with st.spinner("Scoring batch items..."):
+                    probs = model_pipeline.predict_proba(aligned_df)[:, 1] * 100
+                    
+                # Format final results
+                results_df = bulk_df.copy()
+                results_df['risk_probability (%)'] = np.round(probs, 2)
                 
-                bm1.metric("Total Scanned Orders", f"{total_scanned}")
-                bm2.metric("Average RTO Risk Score", f"{avg_scanned_risk:.1f}%")
-                bm3.metric("High-Risk Suspects", f"{high_risk_scanned} ({high_risk_scanned_pct:.1f}%)")
+                conditions = [
+                    (results_df['risk_probability (%)'] < 35),
+                    (results_df['risk_probability (%)'] >= 35) & (results_df['risk_probability (%)'] < 65),
+                    (results_df['risk_probability (%)'] >= 65)
+                ]
+                results_df['risk_category'] = np.select(conditions, ['Low Risk', 'Moderate Risk', 'Critical High Risk'], default='Low Risk')
                 
-                st.markdown("#### 📋 Assessment Output Queue")
-                # Put critical prediction outputs at front
-                col_order = ['rto_risk_category', 'rto_risk_probability (%)']
-                other_cols = [c for c in display_df.columns if c not in col_order]
-                st.dataframe(display_df[col_order + other_cols], use_container_width=True)
+                st.success("🎉 Batch scoring analysis complete!")
                 
-                # Export options
-                csv_export = display_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="⬇️ Download Processed Predictions Log (CSV)",
-                    data=csv_export,
-                    file_name="shopen_rto_batch_predictions.csv",
-                    mime="text/csv",
-                    type="primary"
-                )
+                # Show summary widgets
+                s_col1, s_col2, s_col3 = st.columns(3)
+                total_scored = len(results_df)
+                avg_prob = results_df['risk_probability (%)'].mean()
+                high_risk_count = (results_df['risk_category'] == 'Critical High Risk').sum()
+                
+                s_col1.metric("Total Records Scanned", f"{total_scored}")
+                s_col2.metric("Mean Return Risk Score", f"{avg_prob:.1f}%")
+                s_col3.metric("Critical High-Risk Suspects", f"{high_risk_count} ({ (high_risk_count/total_scored)*100 if total_scored > 0 else 0:.1f}%)")
+                
+                # Split display: left table, right distribution pie
+                res_col1, res_col2 = st.columns([1.2, 0.8])
+                with res_col1:
+                    st.markdown("#### Scored Results Preview")
+                    show_cols = ['risk_category', 'risk_probability (%)'] + [c for c in results_df.columns if c not in ['risk_category', 'risk_probability (%)']]
+                    st.dataframe(results_df[show_cols], use_container_width=True)
+                    
+                    csv_bytes = results_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="⬇️ Download Full Predictions Spreadsheet (CSV)",
+                        data=csv_bytes,
+                        file_name="shopen_pulse_batch_predictions.csv",
+                        mime="text/csv",
+                        type="primary"
+                    )
+                with res_col2:
+                    st.markdown("#### Risk Distribution")
+                    cat_counts = results_df['risk_category'].value_counts().reset_index()
+                    cat_counts.columns = ['Risk Segment', 'Count']
+                    
+                    fig_pie = px.pie(
+                        cat_counts,
+                        values='Count',
+                        names='Risk Segment',
+                        color='Risk Segment',
+                        color_discrete_map={
+                            'Low Risk': '#16a34a',
+                            'Moderate Risk': '#eab308',
+                            'Critical High Risk': '#dc2626'
+                        },
+                        title="Distribution of Scored Records",
+                        hole=0.4
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                    
             except Exception as e:
-                st.error(f"❌ Error parsing file structure: {e}")
-                
-    # ------------------ TAB 3: ANALYTICS & DIAGNOSTICS ------------------
-    with tab3:
-        st.markdown("### 📊 Historical Return Reason Diagnostics")
-        st.write("Visual diagnostics dashboard powered by historical transaction registries.")
+                st.error(f"Error executing batch scoring: {e}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# TAB: INTERACTIVE GRAPHICAL REPORT
+# ==========================================
+with tab_report:
+    st.markdown("### 📊 Interactive Returns Diagnostic Studio")
+    st.write("Create real-time filtered, interactive graphical reports across any dataset configured in Model Studio.")
+    
+    if st.session_state['active_df'] is None:
+        st.warning("⚠️ Active dataset missing! Please configure and load a dataset in the 'Model Studio' tab first.")
+    else:
+        df_report = st.session_state['active_df']
         
-        if df_meta is None:
-            st.warning("⚠️ Historical analytics spreadsheet database missing or unreadable.")
-        else:
-            # Main high-level statistics cards
-            tot_logs = len(df_meta)
-            global_rto = df_meta['returned'].mean() * 100
-            clothing_only = df_meta[df_meta['product_category'] == 'Clothing']
-            clothing_rto_rate = clothing_only['returned'].mean() * 100
-            
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Historical Logs Ingested", f"{tot_logs} orders")
-            k2.metric("Base Return Rate", f"{global_rto:.1f}%")
-            k3.metric("Apparel Category Return Rate", f"{clothing_rto_rate:.1f}%", delta="Critical High RTO")
-            
-            st.markdown("---")
-            
-            # Row 1 charts
-            row1_c1, row1_c2 = st.columns(2)
-            
-            with row1_c1:
-                st.markdown("#### 👚 Return Rates by Product Category")
-                cat_data = df_meta.groupby('product_category')['returned'].mean().reset_index()
-                cat_data['RTO Rate (%)'] = np.round(cat_data['returned'] * 100, 2)
-                cat_data = cat_data.sort_values(by='RTO Rate (%)', ascending=False)
-                st.bar_chart(cat_data, x='product_category', y='RTO Rate (%)')
-                st.caption("Clothing represents a massive outlier, exhibiting a near-total return probability.")
-                
-            with row1_c2:
-                st.markdown("#### 🔍 Primary Reasons for Customer Returns")
-                ret_logs = df_meta[df_meta['returned'] == 1]
-                if 'return_reason' in ret_logs.columns:
-                    reasons_count = ret_logs['return_reason'].value_counts().reset_index()
-                    reasons_count.columns = ['Return Reason', 'Number of Returns']
-                    st.bar_chart(reasons_count, x='Return Reason', y='Number of Returns')
-                    st.caption("Size/fit errors and shipping errors (Wrong item) represent the leading contributors.")
-                else:
-                    st.info("Missing return reason labels in database logs.")
+        # Determine target column
+        active_model = st.session_state['active_model']
+        target_col = active_model.get('target_column', 'returned') if active_model is not None else 'returned'
+        
+        # Fallback check
+        if target_col not in df_report.columns:
+            for col in df_report.columns:
+                if col.lower() in ['returned', 'rto', 'status', 'return_status']:
+                    target_col = col
+                    break
                     
-            st.markdown("---")
-            
-            # Row 2 charts
-            row2_c1, row2_c2 = st.columns(2)
-            
-            with row2_c1:
-                st.markdown("#### 💳 Return Rate by Payment Method")
-                pay_data = df_meta.groupby('payment_method')['returned'].mean().reset_index()
-                pay_data['RTO Rate (%)'] = np.round(pay_data['returned'] * 100, 2)
-                pay_data = pay_data.sort_values(by='RTO Rate (%)', ascending=False)
-                st.bar_chart(pay_data, x='payment_method', y='RTO Rate (%)')
-                st.caption("Cash on Delivery (COD) and standard channels show balanced ratios.")
+        # Verify the target column is indeed binary, otherwise skip
+        target_is_binary = False
+        if target_col in df_report.columns:
+            unique_targets = df_report[target_col].dropna().unique()
+            if len(unique_targets) <= 2:
+                target_is_binary = True
                 
-            with row2_c2:
-                st.markdown("#### 👑 Prime Membership Return Impact")
-                prime_data = df_meta.groupby('is_prime_member')['returned'].mean().reset_index()
-                prime_data['Segment'] = prime_data['is_prime_member'].map({0: 'Non-Prime Member', 1: 'Prime Member'})
-                prime_data['RTO Rate (%)'] = np.round(prime_data['returned'] * 100, 2)
-                st.bar_chart(prime_data, x='Segment', y='RTO Rate (%)')
-                st.caption("Non-Prime customers show a ~9% higher return likelihood than Prime members.")
+        # --- Live Filtering Interface ---
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.subheader("🔍 Real-time Dataset Filters")
+        st.write("Select filters to refine the data used to generate the charts dynamically:")
+        
+        # Columns available for filtering
+        filter_candidates = []
+        for c in df_report.columns:
+            if c == target_col:
+                continue
+            # Exclude ID and high-cardinality string columns
+            if c.lower() in ['order_id', 'customer_id', 'product_id', 'id', 'user_id', 'order_datetime']:
+                continue
+            if not pd.api.types.is_numeric_dtype(df_report[c]) and df_report[c].nunique() > 50:
+                continue
+            filter_candidates.append(c)
+            
+        selected_filter_cols = st.multiselect("Select columns to filter by:", filter_candidates, default=filter_candidates[:2] if len(filter_candidates) >= 2 else filter_candidates)
+        
+        filtered_df = df_report.copy()
+        
+        if len(selected_filter_cols) > 0:
+            filt_cols = st.columns(min(len(selected_filter_cols), 4))
+            for idx, col in enumerate(selected_filter_cols):
+                col_ui = filt_cols[idx % 4]
+                with col_ui:
+                    if pd.api.types.is_numeric_dtype(df_report[col]):
+                        # Numerical filter
+                        min_val = float(df_report[col].min())
+                        max_val = float(df_report[col].max())
+                        
+                        # Handle case where min_val equals max_val
+                        if min_val == max_val:
+                            st.write(f"`{col}` constant = {min_val}")
+                        else:
+                            range_vals = st.slider(
+                                f"Range for `{col}`:",
+                                min_value=min_val,
+                                max_value=max_val,
+                                value=(min_val, max_val),
+                                key=f"filt_slider_{col}"
+                            )
+                            filtered_df = filtered_df[(filtered_df[col] >= range_vals[0]) & (filtered_df[col] <= range_vals[1])]
+                    else:
+                        # Categorical filter
+                        options = sorted([str(x) for x in df_report[col].dropna().unique()])
+                        selected_vals = st.multiselect(
+                            f"Filter `{col}`:",
+                            options,
+                            default=options,
+                            key=f"filt_select_{col}"
+                        )
+                        if len(selected_vals) > 0:
+                            filtered_df = filtered_df[filtered_df[col].astype(str).isin(selected_vals)]
+                            
+            st.info(f"⚡ **Active Filters:** Showing {len(filtered_df)} of {len(df_report)} records ({ (len(filtered_df)/len(df_report))*100:.1f}%)")
+        else:
+            st.info("No active filters. Showing 100% of the dataset.")
+            
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # If dataset is empty after filtering
+        if len(filtered_df) == 0:
+            st.error("❌ The selected filters return 0 records. Adjust the filters to display graphics.")
+        else:
+            # --- Graphical Diagnostic Dashboard Grid ---
+            row1_1, row1_2 = st.columns(2)
+            
+            with row1_1:
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.subheader("🎯 Target Variable Distribution")
+                
+                if target_col in filtered_df.columns:
+                    target_counts = filtered_df[target_col].value_counts().reset_index()
+                    target_counts.columns = [target_col, 'Count']
+                    
+                    # Humanize target mapping for RTO labels
+                    if target_is_binary:
+                        target_counts['Label'] = target_counts[target_col].map({0: 'Delivered (0)', 1: 'Returned / RTO (1)'})
+                    else:
+                        target_counts['Label'] = target_counts[target_col].astype(str)
+                        
+                    fig_target_pie = px.pie(
+                        target_counts,
+                        values='Count',
+                        names='Label',
+                        color='Label',
+                        color_discrete_sequence=px.colors.qualitative.Safe,
+                        hole=0.4,
+                        template='plotly_white'
+                    )
+                    fig_target_pie.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20))
+                    st.plotly_chart(fig_target_pie, use_container_width=True)
+                else:
+                    st.info("Target column not present in filtered data.")
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            with row1_2:
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.subheader("📝 Missing Values Profile")
+                
+                # Calculate missing percentages
+                missing_pct = (filtered_df.isnull().sum() / len(filtered_df)) * 100
+                missing_df = pd.DataFrame({
+                    'Column': missing_pct.index,
+                    'Missing (%)': missing_pct.values
+                }).sort_values(by='Missing (%)', ascending=False)
+                
+                # Exclude columns with 0% missing if possible, but keep a premium look
+                fig_missing = px.bar(
+                    missing_df,
+                    x='Missing (%)',
+                    y='Column',
+                    orientation='h',
+                    color='Missing (%)',
+                    color_continuous_scale='reds',
+                    range_x=[0, 100],
+                    template='plotly_white'
+                )
+                fig_missing.update_layout(
+                    height=350,
+                    margin=dict(l=20, r=20, t=30, b=20),
+                    coloraxis_showscale=False
+                )
+                st.plotly_chart(fig_missing, use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            # Row 2 (Heatmap and User Controlled Custom Charts)
+            row2_1, row2_2 = st.columns(2)
+            
+            with row2_1:
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.subheader("🔥 Correlation Heatmap")
+                
+                # Get numerical features from filtered df
+                num_cols_only = filtered_df.select_dtypes(include=[np.number])
+                
+                if num_cols_only.shape[1] >= 2:
+                    corr_matrix = num_cols_only.corr()
+                    
+                    fig_heatmap = go.Figure(data=go.Heatmap(
+                        z=corr_matrix.values,
+                        x=corr_matrix.columns,
+                        y=corr_matrix.columns,
+                        colorscale='RdBu',
+                        zmin=-1, zmax=1,
+                        colorbar=dict(title="Correlation")
+                    ))
+                    fig_heatmap.update_layout(
+                        height=350,
+                        margin=dict(l=20, r=20, t=30, b=20),
+                        template='plotly_white'
+                    )
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+                else:
+                    st.info("Need at least 2 numerical columns to render a correlation heatmap.")
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            with row2_2:
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.subheader("📊 Feature Importance Diagnostics")
+                
+                if st.session_state['active_model'] is not None:
+                    active = st.session_state['active_model']
+                    agg_importances = active.get('aggregated_importances', {})
+                    if len(agg_importances) > 0:
+                        # Sort importances
+                        imp_items = sorted(agg_importances.items(), key=lambda x: x[1], reverse=True)
+                        imp_df = pd.DataFrame(imp_items, columns=['Feature', 'Importance'])
+                        
+                        fig_imp = px.bar(
+                            imp_df,
+                            x='Importance',
+                            y='Feature',
+                            orientation='h',
+                            color='Importance',
+                            color_continuous_scale='blues',
+                            template='plotly_white'
+                        )
+                        fig_imp.update_layout(
+                            height=350,
+                            margin=dict(l=20, r=20, t=30, b=20),
+                            coloraxis_showscale=False,
+                            yaxis=dict(autorange="reversed")
+                        )
+                        st.plotly_chart(fig_imp, use_container_width=True)
+                    else:
+                        st.info("No feature importance mapped in active model.")
+                else:
+                    st.info("Please train/load a model to display feature importance.")
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+            # --- Dynamic Graphical Explorer ---
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.subheader("🎛️ Dynamic Analysis Explorer")
+            st.write("Generate customized graphs by choosing variables, color groupings, and plot types:")
+            
+            exp_col1, exp_col2, exp_col3, exp_col4 = st.columns(4)
+            
+            with exp_col1:
+                chart_type = st.selectbox(
+                    "Plot Type:",
+                    ["Bar Chart", "Pie Chart", "Line Chart", "Box Plot", "Histogram"]
+                )
+            with exp_col2:
+                x_var = st.selectbox(
+                    "X-Axis Variable:",
+                    sorted(list(filtered_df.columns)),
+                    index=0
+                )
+            with exp_col3:
+                # Optional Y axis variable (default is Count)
+                y_options = ["None (Count)"] + sorted([c for c in filtered_df.columns if c != x_var])
+                y_var_sel = st.selectbox(
+                    "Y-Axis Variable (Optional):",
+                    y_options,
+                    index=0
+                )
+                y_var = None if y_var_sel == "None (Count)" else y_var_sel
+            with exp_col4:
+                # Color grouping column selector
+                color_options = ["None"] + sorted([c for c in filtered_df.columns if df_report[c].nunique() < 15])
+                color_var_sel = st.selectbox(
+                    "Color / Group By (Optional):",
+                    color_options,
+                    index=0
+                )
+                color_var = None if color_var_sel == "None" else color_var_sel
+                
+            # Plot dynamic explorer chart
+            try:
+                if chart_type == "Bar Chart":
+                    if y_var is not None:
+                        # Aggregated bar chart
+                        bar_agg = filtered_df.groupby([x_var] + ([color_var] if color_var else [])).mean(numeric_only=True).reset_index()
+                        fig_custom = px.bar(
+                            bar_agg,
+                            x=x_var,
+                            y=y_var,
+                            color=color_var,
+                            barmode='group',
+                            title=f"Bar Chart: Mean `{y_var}` by `{x_var}`",
+                            template='plotly_white'
+                        )
+                    else:
+                        # Value count bar chart
+                        fig_custom = px.histogram(
+                            filtered_df,
+                            x=x_var,
+                            color=color_var,
+                            barmode='group',
+                            title=f"Bar Chart: Distribution of `{x_var}`",
+                            template='plotly_white'
+                        )
+                        
+                elif chart_type == "Pie Chart":
+                    # Sum count of unique classes
+                    pie_df = filtered_df[x_var].value_counts().reset_index()
+                    pie_df.columns = [x_var, 'Count']
+                    fig_custom = px.pie(
+                        pie_df,
+                        values='Count',
+                        names=x_var,
+                        title=f"Pie Chart: Shares of `{x_var}` Categories",
+                        template='plotly_white'
+                    )
+                    
+                elif chart_type == "Line Chart":
+                    if y_var is not None:
+                        # Sort by X axis for chronological/numerical ordering
+                        line_df = filtered_df.sort_values(by=x_var)
+                        fig_custom = px.line(
+                            line_df,
+                            x=x_var,
+                            y=y_var,
+                            color=color_var,
+                            title=f"Line Chart: Trend of `{y_var}` by `{x_var}`",
+                            template='plotly_white'
+                        )
+                    else:
+                        st.warning("⚠️ Line charts require a Y-axis variable to track values.")
+                        fig_custom = None
+                        
+                elif chart_type == "Box Plot":
+                    if y_var is not None:
+                        fig_custom = px.box(
+                            filtered_df,
+                            x=x_var,
+                            y=y_var,
+                            color=color_var,
+                            title=f"Box Plot: `{y_var}` distributions by `{x_var}`",
+                            template='plotly_white'
+                        )
+                    else:
+                        fig_custom = px.box(
+                            filtered_df,
+                            y=x_var,
+                            color=color_var,
+                            title=f"Box Plot: Distributions of `{x_var}`",
+                            template='plotly_white'
+                        )
+                        
+                elif chart_type == "Histogram":
+                    fig_custom = px.histogram(
+                        filtered_df,
+                        x=x_var,
+                        y=y_var,
+                        color=color_var,
+                        marginal="box", # Draw boxplot overlay
+                        title=f"Histogram: Distribution of `{x_var}`",
+                        template='plotly_white'
+                    )
+                    
+                if fig_custom is not None:
+                    fig_custom.update_layout(height=450)
+                    st.plotly_chart(fig_custom, use_container_width=True)
+            except Exception as e:
+                st.error(f"❌ Could not render selected chart combination: {e}. Check if you selected a categorical column on a numerical axis.")
+            st.markdown('</div>', unsafe_allow_html=True)
