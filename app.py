@@ -603,7 +603,7 @@ with tab_bulk:
                 
                 # Verify and align columns
                 missing_features = []
-                aligned_df = pd.DataFrame()
+                aligned_df = pd.DataFrame(index=bulk_df.index)
                 
                 for num_col in numerical_features:
                     if num_col in bulk_df.columns:
