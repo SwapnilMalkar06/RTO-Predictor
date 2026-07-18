@@ -62,6 +62,10 @@ def train_custom_model(df, target_col, numerical_features, categorical_features)
     Builds and trains a scikit-learn pipeline for classification.
     Calculates detailed metrics, feature importances, and metadata for dynamic UI generation.
     """
+    # Defensive downsampling for large datasets to prevent OutOfMemory (OOM) crashes in the UI
+    if len(df) > 50000:
+        df = df.sample(n=50000, random_state=42)
+        
     # 1. Clean target column: handle NaNs and convert to binary
     df = df.dropna(subset=[target_col])
     y = df[target_col]
