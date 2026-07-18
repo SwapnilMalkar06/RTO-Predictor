@@ -163,15 +163,24 @@ def train_custom_model(df, target_col, numerical_features, categorical_features)
             
     # Calculate aggregated importances for original features
     agg_importances = {}
-    for col in numerical_features:
-        agg_importances[col] = importances_dict.get(col, 0.0)
-    for col in categorical_features:
-        # Sum importances of all one-hot encoded levels
-        cat_sum = 0.0
-        for k, v in importances_dict.items():
-            if k.startswith(col + "_") or k == col:
-                cat_sum += v
-        agg_importances[col] = cat_sum
+    for col in numerical_features + categorical_features:
+        agg_importances[col] = 0.0
+        
+    for k, v in importances_dict.items():
+        clean_k = k
+        if k.startswith("num__"):
+            clean_k = k[5:]
+        elif k.startswith("cat__"):
+            clean_k = k[5:]
+            
+        for col in numerical_features:
+            if clean_k == col:
+                agg_importances[col] += v
+                break
+        for col in categorical_features:
+            if clean_k.startswith(col + "_") or clean_k == col:
+                agg_importances[col] += v
+                break
         
     # Standardize aggregate importances to sum to 1.0
     agg_sum = sum(agg_importances.values())

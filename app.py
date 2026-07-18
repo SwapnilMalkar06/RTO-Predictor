@@ -166,6 +166,39 @@ def load_default_dataset():
             return None
     return None
 
+def get_clean_aggregated_importances(active_model):
+    if active_model is None:
+        return {}
+    agg = active_model.get('aggregated_importances', {})
+    # If agg is empty or all values are 0.0, try to reconstruct it from detailed importances
+    if len(agg) == 0 or sum(agg.values()) == 0.0:
+        detailed = active_model.get('feature_importances', {})
+        num_feats = active_model.get('numerical_features', [])
+        cat_feats = active_model.get('categorical_features', [])
+        
+        agg = {col: 0.0 for col in num_feats + cat_feats}
+        for k, v in detailed.items():
+            clean_k = k
+            if k.startswith("num__"):
+                clean_k = k[5:]
+            elif k.startswith("cat__"):
+                clean_k = k[5:]
+                
+            for col in num_feats:
+                if clean_k == col:
+                    agg[col] += v
+                    break
+            for col in cat_feats:
+                if clean_k.startswith(col + "_") or clean_k == col:
+                    agg[col] += v
+                    break
+                    
+        # Standardize sum to 1.0
+        s = sum(agg.values())
+        if s > 0:
+            agg = {k: v / s for k, v in agg.items()}
+    return agg
+
 # --- State Management Initialization ---
 if 'active_model' not in st.session_state:
     st.session_state['active_model'] = load_default_model()
@@ -361,7 +394,7 @@ with tab_studio:
             
             # Plot Feature Importance using Plotly
             st.markdown("#### Feature Importance Profile")
-            agg_importances = active.get('aggregated_importances', {})
+            agg_importances = get_clean_aggregated_importances(active)
             if len(agg_importances) > 0:
                 imp_df = pd.DataFrame({
                     'Feature': list(agg_importances.keys()),
@@ -515,7 +548,7 @@ with tab_profiler:
                 st.write("Modify key numeric drivers below to evaluate real-time adjustments on return likelihood:")
                 
                 # Find top 2 numerical features based on aggregate importance
-                agg_imp = model_bundle.get('aggregated_importances', {})
+                agg_imp = get_clean_aggregated_importances(model_bundle)
                 num_imps = {k: v for k, v in agg_imp.items() if k in numerical_features}
                 sorted_num_feats = sorted(num_imps.keys(), key=lambda x: num_imps[x], reverse=True)
                 
@@ -910,7 +943,7 @@ with tab_report:
             
             if st.session_state['active_model'] is not None:
                 active = st.session_state['active_model']
-                agg_importances = active.get('aggregated_importances', {})
+                agg_importances = get_clean_aggregated_importances(active)
                 if len(agg_importances) > 0:
                     # Sort importances
                     imp_items = sorted(agg_importances.items(), key=lambda x: x[1], reverse=True)
