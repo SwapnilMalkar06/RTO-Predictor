@@ -813,26 +813,47 @@ with tab_report:
                 st.subheader("🎯 Target Variable Distribution")
                 
                 if target_col in filtered_df.columns:
-                    target_counts = filtered_df[target_col].value_counts().reset_index()
-                    target_counts.columns = [target_col, 'Count']
+                    unique_count = filtered_df[target_col].nunique()
                     
-                    # Humanize target mapping for RTO labels
-                    if target_is_binary:
-                        target_counts['Label'] = target_counts[target_col].map({0: 'Delivered (0)', 1: 'Returned / RTO (1)'})
-                    else:
-                        target_counts['Label'] = target_counts[target_col].astype(str)
+                    if unique_count <= 10:
+                        target_counts = filtered_df[target_col].value_counts().reset_index()
+                        target_counts.columns = [target_col, 'Count']
                         
-                    fig_target_pie = px.pie(
-                        target_counts,
-                        values='Count',
-                        names='Label',
-                        color='Label',
-                        color_discrete_sequence=px.colors.qualitative.Safe,
-                        hole=0.4,
-                        template='plotly_white'
-                    )
-                    fig_target_pie.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20))
-                    st.plotly_chart(fig_target_pie, use_container_width=True)
+                        # Humanize target mapping for binary classification columns
+                        if target_is_binary:
+                            unique_vals = set(target_counts[target_col])
+                            if unique_vals.issubset({0, 1}):
+                                target_counts['Label'] = target_counts[target_col].map({0: 'Delivered (0)', 1: 'Returned / RTO (1)'})
+                            else:
+                                target_counts['Label'] = target_counts[target_col].astype(str)
+                        else:
+                            target_counts['Label'] = target_counts[target_col].astype(str)
+                            
+                        fig_target_pie = px.pie(
+                            target_counts,
+                            values='Count',
+                            names='Label',
+                            color='Label',
+                            color_discrete_sequence=px.colors.qualitative.Safe,
+                            hole=0.4,
+                            template='plotly_white'
+                        )
+                        fig_target_pie.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20))
+                        st.plotly_chart(fig_target_pie, use_container_width=True)
+                        st.caption("Discrete Categories: Displays segment shares of each class label.")
+                    else:
+                        # For continuous values, plot a beautiful histogram distribution
+                        fig_target_hist = px.histogram(
+                            filtered_df,
+                            x=target_col,
+                            marginal="box",
+                            color_discrete_sequence=['#4f46e5'],
+                            template='plotly_white',
+                            title=f"Value Distribution of `{target_col}`"
+                        )
+                        fig_target_hist.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20))
+                        st.plotly_chart(fig_target_hist, use_container_width=True)
+                        st.caption("Continuous Numeric Distribution: Displays value ranges, counts, and a boxplot summary.")
                 else:
                     st.info("Target column not present in filtered data.")
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -841,96 +862,88 @@ with tab_report:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.subheader("📝 Missing Values Profile")
                 
-                # Calculate missing percentages
-                missing_pct = (filtered_df.isnull().sum() / len(filtered_df)) * 100
-                missing_df = pd.DataFrame({
-                    'Column': missing_pct.index,
-                    'Missing (%)': missing_pct.values
-                }).sort_values(by='Missing (%)', ascending=False)
-                
-                # Exclude columns with 0% missing if possible, but keep a premium look
-                fig_missing = px.bar(
-                    missing_df,
-                    x='Missing (%)',
-                    y='Column',
-                    orientation='h',
-                    color='Missing (%)',
-                    color_continuous_scale='reds',
-                    range_x=[0, 100],
-                    template='plotly_white'
-                )
-                fig_missing.update_layout(
-                    height=350,
-                    margin=dict(l=20, r=20, t=30, b=20),
-                    coloraxis_showscale=False
-                )
-                st.plotly_chart(fig_missing, use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-            # Row 2 (Heatmap and User Controlled Custom Charts)
-            row2_1, row2_2 = st.columns(2)
-            
-            with row2_1:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.subheader("🔥 Correlation Heatmap")
-                
-                # Get numerical features from filtered df
-                num_cols_only = filtered_df.select_dtypes(include=[np.number])
-                
-                if num_cols_only.shape[1] >= 2:
-                    corr_matrix = num_cols_only.corr()
-                    
-                    fig_heatmap = go.Figure(data=go.Heatmap(
-                        z=corr_matrix.values,
-                        x=corr_matrix.columns,
-                        y=corr_matrix.columns,
-                        colorscale='RdBu',
-                        zmin=-1, zmax=1,
-                        colorbar=dict(title="Correlation")
-                    ))
-                    fig_heatmap.update_layout(
-                        height=350,
-                        margin=dict(l=20, r=20, t=30, b=20),
-                        template='plotly_white'
-                    )
-                    st.plotly_chart(fig_heatmap, use_container_width=True)
+                total_missing = filtered_df.isnull().sum().sum()
+                if total_missing == 0:
+                    st.markdown("""
+                    <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 1.2rem; color: #166534; margin-bottom: 0.5rem;">
+                        <h4 style="margin: 0 0 0.5rem 0; font-weight: 700;">🎉 Perfect Data Quality!</h4>
+                        <p style="margin: 0; font-size: 0.95rem; line-height: 1.5;">All variables in your active dataset are 100% complete. No missing or null values were identified.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.info("Breakdown: Every column contains 0% missing values.")
                 else:
-                    st.info("Need at least 2 numerical columns to render a correlation heatmap.")
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-            with row2_2:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.subheader("📊 Feature Importance Diagnostics")
-                
-                if st.session_state['active_model'] is not None:
-                    active = st.session_state['active_model']
-                    agg_importances = active.get('aggregated_importances', {})
-                    if len(agg_importances) > 0:
-                        # Sort importances
-                        imp_items = sorted(agg_importances.items(), key=lambda x: x[1], reverse=True)
-                        imp_df = pd.DataFrame(imp_items, columns=['Feature', 'Importance'])
+                    # Calculate missing percentages
+                    missing_pct = (filtered_df.isnull().sum() / len(filtered_df)) * 100
+                    # Filter columns with missing values > 0 to keep chart clean
+                    missing_pct = missing_pct[missing_pct > 0]
+                    
+                    if len(missing_pct) > 0:
+                        missing_df = pd.DataFrame({
+                            'Column': missing_pct.index,
+                            'Missing (%)': missing_pct.values
+                        }).sort_values(by='Missing (%)', ascending=True)
                         
-                        fig_imp = px.bar(
-                            imp_df,
-                            x='Importance',
-                            y='Feature',
+                        fig_missing = px.bar(
+                            missing_df,
+                            x='Missing (%)',
+                            y='Column',
                             orientation='h',
-                            color='Importance',
-                            color_continuous_scale='blues',
+                            color='Missing (%)',
+                            color_continuous_scale='reds',
+                            range_x=[0, 100],
                             template='plotly_white'
                         )
-                        fig_imp.update_layout(
+                        fig_missing.update_layout(
                             height=350,
                             margin=dict(l=20, r=20, t=30, b=20),
-                            coloraxis_showscale=False,
-                            yaxis=dict(autorange="reversed")
+                            coloraxis_showscale=False
                         )
-                        st.plotly_chart(fig_imp, use_container_width=True)
+                        st.plotly_chart(fig_missing, use_container_width=True)
                     else:
-                        st.info("No feature importance mapped in active model.")
-                else:
-                    st.info("Please train/load a model to display feature importance.")
+                        st.info("No missing values in filtered subset.")
                 st.markdown('</div>', unsafe_allow_html=True)
+                
+            # Feature Importance Diagnostics (Full-width for readability)
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.subheader("📊 Predictive Feature Weights (Feature Influence)")
+            st.write("Identify which variables have the highest decision weight in predicting the target:")
+            
+            if st.session_state['active_model'] is not None:
+                active = st.session_state['active_model']
+                agg_importances = active.get('aggregated_importances', {})
+                if len(agg_importances) > 0:
+                    # Sort importances
+                    imp_items = sorted(agg_importances.items(), key=lambda x: x[1], reverse=True)
+                    imp_df = pd.DataFrame(imp_items, columns=['Feature Name', 'Predictive Influence'])
+                    imp_df['Influence (%)'] = np.round(imp_df['Predictive Influence'] * 100, 1)
+                    
+                    fig_imp = px.bar(
+                        imp_df,
+                        x='Influence (%)',
+                        y='Feature Name',
+                        orientation='h',
+                        color='Influence (%)',
+                        color_continuous_scale='blues',
+                        template='plotly_white',
+                        labels={'Influence (%)': 'Influence (%)', 'Feature Name': 'Feature'}
+                    )
+                    fig_imp.update_layout(
+                        height=400,
+                        margin=dict(l=20, r=20, t=30, b=20),
+                        coloraxis_showscale=False,
+                        yaxis=dict(autorange="reversed")
+                    )
+                    st.plotly_chart(fig_imp, use_container_width=True)
+                    st.markdown("""
+                    💡 **How to interpret this chart:**  
+                    The variables at the top of the list (with the longest bars) have the highest impact on predictions. 
+                    For instance, a feature with **20% influence** has double the predictive weight of a feature with **10% influence** when the model scores transactions.
+                    """)
+                else:
+                    st.info("No feature importance mapped in active model.")
+            else:
+                st.info("Please train/load a model to display feature importance.")
+            st.markdown('</div>', unsafe_allow_html=True)
                 
             # --- Dynamic Graphical Explorer ---
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
