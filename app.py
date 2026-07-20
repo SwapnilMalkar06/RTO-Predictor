@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 from train_model import train_custom_model, detect_column_types
 
 st.set_page_config(
-    page_title="Shopen Pulse - Dynamic RTO Engine",
+    page_title="Universal Risk Predictor - Dynamic RTO Engine",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -209,7 +209,7 @@ if 'active_df' not in st.session_state:
 # --- Sidebar Controls ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/9598/9598096.png", width=60)
-    st.markdown("### **Shopen Pulse Console**")
+    st.markdown("### **Risk Predictor Console**")
     st.write("Dynamic RTO & returns control cockpit.")
     st.markdown("---")
     
@@ -218,13 +218,12 @@ with st.sidebar:
         model_meta = st.session_state['active_model']
         target_name = model_meta.get('target_column', 'returned')
         acc = model_meta.get('metrics', {}).get('accuracy', 0.85)
-        auc = model_meta.get('metrics', {}).get('roc_auc', 0.88)
         
         st.success("🟢 **Operational Model Loaded**")
         st.markdown(f"**Target Col:** `{target_name}`")
         st.markdown(f"**Num Features:** `{len(model_meta['numerical_features'])}`")
         st.markdown(f"**Cat Features:** `{len(model_meta['categorical_features'])}`")
-        st.markdown(f"**Accuracy:** `{acc*100:.1f}%` | **ROC-AUC:** `{auc:.2f}`")
+        st.markdown(f"**Accuracy:** `{acc*100:.1f}%`")
     else:
         st.error("🔴 **No Model Loaded**")
         st.info("Train a model in the 'Model Studio' tab to enable predictions.")
@@ -243,7 +242,7 @@ with st.sidebar:
 # --- Main Layout Header ---
 st.markdown("""
 <div class="header-card">
-    <h1>🛡️ Shopen Pulse — Return & RTO Predictive Suite</h1>
+    <h1>🛡️ Universal Risk & RTO Predictive Suite</h1>
     <p>Upload custom datasets, dynamically train classification models, run batch files, and analyze returns diagnostics.</p>
 </div>
 """, unsafe_allow_html=True)
@@ -383,9 +382,7 @@ with tab_studio:
             metrics = active['metrics']
             
             # Metric grid
-            m_col1, m_col2 = st.columns(2)
-            m_col1.metric("Accuracy Score", f"{metrics['accuracy']*100:.2f}%")
-            m_col2.metric("ROC-AUC Score", f"{metrics['roc_auc']:.3f}")
+            st.metric("Accuracy Score", f"{metrics['accuracy']*100:.2f}%")
             
             # Show Classification Report
             st.markdown("#### Classification Report Details")
@@ -701,7 +698,7 @@ with tab_bulk:
                     st.download_button(
                         label="⬇️ Download Full Predictions Spreadsheet (CSV)",
                         data=csv_bytes,
-                        file_name="shopen_pulse_batch_predictions.csv",
+                        file_name="batch_risk_predictions.csv",
                         mime="text/csv",
                         type="primary"
                     )

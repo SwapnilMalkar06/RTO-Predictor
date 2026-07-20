@@ -1,6 +1,6 @@
-# Shopen Pulse — RTO Risk Predictor
+# Universal Risk & RTO Predictor
 
-Shopen Pulse is a Machine Learning tool designed to predict Return to Origin (RTO) / packaging return risks in real-time. It enables digital merchants to inspect, predict, and intercept package return risk.
+This is a Machine Learning tool designed to predict Return to Origin (RTO) / packaging return risks in real-time. It enables digital merchants to inspect, predict, and intercept package return risk.
 
 ## Project Structure
 - `app.py`: Streamlit-based web dashboard / risk control center interface.
