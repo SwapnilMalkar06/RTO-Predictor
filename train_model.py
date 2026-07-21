@@ -1,3 +1,12 @@
+"""
+Machine Learning Training Pipeline Core for the Universal Risk Predictor.
+Handles feature detection, scaling, imputation, random forest classifier fitting,
+evaluation, metadata mapping, and serialization.
+"""
+
+import os
+import sys
+from typing import Any, Tuple, List, Dict
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -6,22 +15,35 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.metrics import classification_report, roc_auc_score, accuracy_score
 import joblib
-import os
-import sys
+
+# Import centralized configuration constants
+from config import (
+    DEFAULT_DATASET_PATH,
+    MODEL_OUTPUT_PATH,
+    TARGET_COLUMN_FALLBACKS,
+    COLUMN_MAPPING
+)
 
 # Ensure the output models folder structure exists natively
 os.makedirs("models", exist_ok=True)
 
-def detect_column_types(df, target_col):
+def detect_column_types(df: pd.DataFrame, target_col: str) -> Tuple[List[str], List[str], List[str]]:
     """
     Dynamically infers numerical and categorical columns for machine learning.
     Excludes unique IDs and date/time columns to prevent overfitting.
+    
+    Args:
+        df: Input raw pandas DataFrame.
+        target_col: The label or target class column name.
+        
+    Returns:
+        A tuple of (numerical_features, categorical_features, ignored_features) lists.
     """
-    numerical_features = []
-    categorical_features = []
-    ignored_features = []
+    numerical_features: List[str] = []
+    categorical_features: List[str] = []
+    ignored_features: List[str] = []
     
     for col in df.columns:
         if col == target_col:
@@ -57,10 +79,24 @@ def detect_column_types(df, target_col):
             
     return numerical_features, categorical_features, ignored_features
 
-def train_custom_model(df, target_col, numerical_features, categorical_features):
+def train_custom_model(
+    df: pd.DataFrame, 
+    target_col: str, 
+    numerical_features: List[str], 
+    categorical_features: List[str]
+) -> Dict[str, Any]:
     """
     Builds and trains a scikit-learn pipeline for classification.
     Calculates detailed metrics, feature importances, and metadata for dynamic UI generation.
+    
+    Args:
+        df: Training DataFrame.
+        target_col: Binary target label column.
+        numerical_features: List of numerical feature names.
+        categorical_features: List of categorical feature names.
+        
+    Returns:
+        A dictionary containing the pipeline, features, metrics, and feature metadata.
     """
     # Defensive downsampling for large datasets to prevent OutOfMemory (OOM) crashes in the UI
     if len(df) > 50000:
@@ -120,7 +156,6 @@ def train_custom_model(df, target_col, numerical_features, categorical_features)
     except Exception:
         y_pred_proba = None
         
-    from sklearn.metrics import accuracy_score
     accuracy = accuracy_score(y_test, y_pred)
     
     if y_pred_proba is not None:
@@ -230,14 +265,13 @@ def train_custom_model(df, target_col, numerical_features, categorical_features)
     }
     
     # Save model metadata bundle
-    model_path = os.path.join('models', 'rto_predictor_model.pkl')
-    joblib.dump(model_metadata, model_path)
-    print(f"[SUCCESS] Model architecture and metadata saved to '{model_path}'")
+    joblib.dump(model_metadata, MODEL_OUTPUT_PATH)
+    print(f"[SUCCESS] Model architecture and metadata saved to '{MODEL_OUTPUT_PATH}'")
     return model_metadata
 
 if __name__ == '__main__':
     # 1. Access the dataset path location
-    file_path = os.path.join("data", "amazon_returns_dataset_cleaned.xlsx")
+    file_path = DEFAULT_DATASET_PATH
     if len(sys.argv) > 1:
         file_path = sys.argv[1]
         
@@ -250,38 +284,15 @@ if __name__ == '__main__':
     else:
         df = pd.read_excel(file_path, engine="openpyxl")
         
-    # Standardize columns mapping for initial Amazon dataset if headers are messy
-    column_mapping = {
-        'Order_ID': 'order_id', 'Order ID': 'order_id',
-        'Product_ID': 'product_id', 'Product ID': 'product_id',
-        'User_ID': 'customer_id', 'User ID': 'customer_id',
-        'Product_Category': 'product_category', 'Product Category': 'product_category',
-        'Product_Price': 'price', 'Product Price': 'price', 'Price': 'price',
-        'Order_Quantity': 'quantity', 'Order Quantity': 'quantity', 'Quantity': 'quantity',
-        'Return_Reason': 'return_reason', 'Return Reason': 'return_reason',
-        'Return_Status': 'returned', 'Return Status': 'returned', 'returned': 'returned',
-        'Days_to_Return': 'delivery_days', 'Days to Return': 'delivery_days',
-        'User_Location': 'user_location', 'User Location': 'user_location',
-        'Payment_Method': 'payment_method', 'Payment Method': 'payment_method',
-        'Shipping_Method': 'shipping_type', 'Shipping Method': 'shipping_type', 'Shipping_Type': 'shipping_type', 'Shipping Type': 'shipping_type',
-        'Discount_Applied': 'discount_pct', 'Discount Applied': 'discount_pct', 'Discount': 'discount_pct',
-        'Order_Date': 'order_datetime', 'Order Date': 'order_datetime', 'order_date': 'order_datetime',
-        'is_prime_member': 'is_prime_member', 'Prime_Member': 'is_prime_member',
-        'previous_returns_count': 'previous_returns_count', 'previous returns count': 'previous_returns_count',
-        'customer_total_orders': 'customer_total_orders', 'customer total orders': 'customer_total_orders',
-        'customer_tenure_days': 'customer_tenure_days', 'customer tenure days': 'customer_tenure_days',
-        'review_rating': 'review_rating', 'review rating': 'review_rating',
-        'seller_rating': 'seller_rating', 'seller rating': 'seller_rating'
-    }
-    
-    df = df.rename(columns=lambda x: column_mapping.get(x, x))
-    df = df.rename(columns=lambda x: column_mapping.get(x.strip(), x))
+    # Standardize columns mapping using configuration mapping dict
+    df = df.rename(columns=lambda x: COLUMN_MAPPING.get(x, x))
+    df = df.rename(columns=lambda x: COLUMN_MAPPING.get(x.strip(), x))
     df.columns = df.columns.str.strip().str.lower()
     
-    # Map target column dynamically
+    # Map target column dynamically from configuration fallbacks
     target = 'returned'
     if target not in df.columns:
-        for potential_target in ['returned', 'return_status', 'returnstatus']:
+        for potential_target in TARGET_COLUMN_FALLBACKS:
             if potential_target in df.columns:
                 target = potential_target
                 break

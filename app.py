@@ -1,3 +1,4 @@
+from typing import Any, Optional, Dict, List
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,6 +8,12 @@ import time
 import plotly.express as px
 import plotly.graph_objects as go
 from train_model import train_custom_model, detect_column_types
+from config import (
+    DEFAULT_DATASET_PATH,
+    MODEL_OUTPUT_PATH,
+    COLUMN_MAPPING,
+    TARGET_COLUMN_FALLBACKS
+)
 
 st.set_page_config(
     page_title="Universal Risk Predictor - Dynamic RTO Engine",
@@ -103,70 +110,48 @@ st.markdown("""
 
 # --- Helper Functions ---
 @st.cache_resource
-def load_default_model():
-    model_path = os.path.join('models', 'rto_predictor_model.pkl')
-    if os.path.exists(model_path):
-        try:
-            return joblib.load(model_path)
-        except Exception as e:
-            st.sidebar.error(f"Error loading default model: {e}")
-            return None
+def load_default_model() -> Optional[Dict[str, Any]]:
+    """
+    Loads the default serialized model metadata bundle from disk.
+    Does not render UI sidebar errors inside caching layer to prevent side-effects.
+    """
+    if os.path.exists(MODEL_OUTPUT_PATH):
+        return joblib.load(MODEL_OUTPUT_PATH)
     return None
 
 @st.cache_data
-def load_default_dataset():
-    file_path = os.path.join("data", "amazon_returns_dataset_cleaned.xlsx")
-    if os.path.exists(file_path):
-        try:
-            df = pd.read_excel(file_path, engine="openpyxl")
-            # Standardize columns mapping for initial Amazon dataset
-            column_mapping = {
-                'Order_ID': 'order_id', 'Order ID': 'order_id',
-                'Product_ID': 'product_id', 'Product ID': 'product_id',
-                'User_ID': 'customer_id', 'User ID': 'customer_id',
-                'Product_Category': 'product_category', 'Product Category': 'product_category',
-                'Product_Price': 'price', 'Product Price': 'price', 'Price': 'price',
-                'Order_Quantity': 'quantity', 'Order Quantity': 'quantity', 'Quantity': 'quantity',
-                'Return_Reason': 'return_reason', 'Return Reason': 'return_reason',
-                'Return_Status': 'returned', 'Return Status': 'returned', 'returned': 'returned',
-                'Days_to_Return': 'delivery_days', 'Days to Return': 'delivery_days',
-                'User_Location': 'user_location', 'User Location': 'user_location',
-                'Payment_Method': 'payment_method', 'Payment Method': 'payment_method',
-                'Shipping_Method': 'shipping_type', 'Shipping Method': 'shipping_type', 'Shipping_Type': 'shipping_type', 'Shipping Type': 'shipping_type',
-                'Discount_Applied': 'discount_pct', 'Discount Applied': 'discount_pct', 'Discount': 'discount_pct',
-                'Order_Date': 'order_datetime', 'Order Date': 'order_datetime', 'order_date': 'order_datetime',
-                'is_prime_member': 'is_prime_member', 'Prime_Member': 'is_prime_member',
-                'previous_returns_count': 'previous_returns_count', 'previous returns count': 'previous_returns_count',
-                'customer_total_orders': 'customer_total_orders', 'customer total orders': 'customer_total_orders',
-                'customer_tenure_days': 'customer_tenure_days', 'customer tenure days': 'customer_tenure_days',
-                'review_rating': 'review_rating', 'review rating': 'review_rating',
-                'seller_rating': 'seller_rating', 'seller rating': 'seller_rating'
-            }
-            df = df.rename(columns=lambda x: column_mapping.get(x, x))
-            df = df.rename(columns=lambda x: column_mapping.get(x.strip(), x))
-            df.columns = df.columns.str.strip().str.lower()
-            
-            # Derive weekend mapping if not present
-            if 'order_weekday' in df.columns:
-                df['is_weekend'] = df['order_weekday'].isin(['Saturday', 'Sunday']).astype(int)
-            elif 'order_datetime' in df.columns:
-                try:
-                    dt_series = pd.to_datetime(df['order_datetime'])
-                    df['order_weekday'] = dt_series.dt.day_name()
-                    df['order_hour'] = dt_series.dt.hour
-                    df['is_weekend'] = dt_series.dt.dayofweek.isin([5, 6]).astype(int)
-                except Exception:
-                    df['is_weekend'] = 0
-            else:
+def load_default_dataset() -> Optional[pd.DataFrame]:
+    """
+    Loads the default Amazon returns cleaned baseline dataset.
+    Standardizes schema headers using Column Mapping configuration.
+    """
+    if os.path.exists(DEFAULT_DATASET_PATH):
+        df = pd.read_excel(DEFAULT_DATASET_PATH, engine="openpyxl")
+        df = df.rename(columns=lambda x: COLUMN_MAPPING.get(x, x))
+        df = df.rename(columns=lambda x: COLUMN_MAPPING.get(x.strip(), x))
+        df.columns = df.columns.str.strip().str.lower()
+        
+        # Derive weekend mapping if not present
+        if 'order_weekday' in df.columns:
+            df['is_weekend'] = df['order_weekday'].isin(['Saturday', 'Sunday']).astype(int)
+        elif 'order_datetime' in df.columns:
+            try:
+                dt_series = pd.to_datetime(df['order_datetime'])
+                df['order_weekday'] = dt_series.dt.day_name()
+                df['order_hour'] = dt_series.dt.hour
+                df['is_weekend'] = dt_series.dt.dayofweek.isin([5, 6]).astype(int)
+            except Exception:
                 df['is_weekend'] = 0
-                
-            return df
-        except Exception as e:
-            st.sidebar.error(f"Error loading default dataset: {e}")
-            return None
+        else:
+            df['is_weekend'] = 0
+            
+        return df
     return None
 
-def get_clean_aggregated_importances(active_model):
+def get_clean_aggregated_importances(active_model: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    """
+    Standardizes and aggregates feature importance weights from categorical/OHE columns.
+    """
     if active_model is None:
         return {}
     agg = active_model.get('aggregated_importances', {})
@@ -201,10 +186,18 @@ def get_clean_aggregated_importances(active_model):
 
 # --- State Management Initialization ---
 if 'active_model' not in st.session_state:
-    st.session_state['active_model'] = load_default_model()
+    try:
+        st.session_state['active_model'] = load_default_model()
+    except Exception as e:
+        st.sidebar.error(f"Error loading default model: {e}")
+        st.session_state['active_model'] = None
     
 if 'active_df' not in st.session_state:
-    st.session_state['active_df'] = load_default_dataset()
+    try:
+        st.session_state['active_df'] = load_default_dataset()
+    except Exception as e:
+        st.sidebar.error(f"Error loading default dataset: {e}")
+        st.session_state['active_df'] = None
 
 # --- Sidebar Controls ---
 with st.sidebar:
@@ -231,8 +224,16 @@ with st.sidebar:
     st.markdown("---")
     # Quick reset button
     if st.button("Reset to Default Settings"):
-        st.session_state['active_model'] = load_default_model()
-        st.session_state['active_df'] = load_default_dataset()
+        try:
+            st.session_state['active_model'] = load_default_model()
+        except Exception as e:
+            st.sidebar.error(f"Error resetting default model: {e}")
+            st.session_state['active_model'] = None
+        try:
+            st.session_state['active_df'] = load_default_dataset()
+        except Exception as e:
+            st.sidebar.error(f"Error resetting default dataset: {e}")
+            st.session_state['active_df'] = None
         if 'scored_bulk_df' in st.session_state:
             st.session_state['scored_bulk_df'] = None
         if 'bulk_filename' in st.session_state:
@@ -302,10 +303,10 @@ with tab_studio:
             
             # Select target variable
             cols_list = sorted(list(raw_df.columns))
-            # Auto-detect target column index
+            # Auto-detect target column index using central configuration fallbacks
             target_default_idx = 0
             for idx, c in enumerate(cols_list):
-                if c.lower() in ['returned', 'return_status', 'rto', 'returned_status', 'status']:
+                if c.lower() in [f.lower() for f in TARGET_COLUMN_FALLBACKS]:
                     target_default_idx = idx
                     break
                     
@@ -762,7 +763,7 @@ with tab_report:
                 target_col = 'risk_category'
             else:
                 for col in df_report.columns:
-                    if col.lower() in ['returned', 'rto', 'status', 'return_status']:
+                    if col.lower() in [f.lower() for f in TARGET_COLUMN_FALLBACKS]:
                         target_col = col
                         break
                         
@@ -828,7 +829,8 @@ with tab_report:
                         if len(selected_vals) > 0:
                             filtered_df = filtered_df[filtered_df[col].astype(str).isin(selected_vals)]
                             
-            st.info(f"⚡ **Active Filters:** Showing {len(filtered_df)} of {len(df_report)} records ({ (len(filtered_df)/len(df_report))*100:.1f}%)")
+            pct = (len(filtered_df) / len(df_report)) * 100 if len(df_report) > 0 else 0.0
+            st.info(f"⚡ **Active Filters:** Showing {len(filtered_df)} of {len(df_report)} records ({pct:.1f}%)")
         else:
             st.info("No active filters. Showing 100% of the dataset.")
             
