@@ -5,6 +5,8 @@ This is a Machine Learning tool designed to predict Return to Origin (RTO) / pac
 ## Project Structure
 - `app.py`: Streamlit-based web dashboard / risk control center interface.
 - `train_model.py`: Script to train the predictive model pipeline.
+- `config.py`: Centralized configuration constants (mappings, paths, settings).
+- `test_functional.py`: Automated pytest suite testing system functional parameters.
 - `check_columns.py`: Utility script to check details and headers of the input dataset.
 - `requirements.txt`: Dependencies needed to run the application and model.
 - `data/`: Folder to store the customer transactional/orders log spreadsheet.
@@ -41,3 +43,9 @@ Launch the control center interface local server:
 streamlit run app.py
 ```
 Open the provided URL (typically `http://localhost:8501`) in your browser to interact with the dashboard.
+
+### 5. Run Automated Tests
+Verify all system components and functional parameters using pytest:
+```bash
+python -m pytest test_functional.py -v
+```
